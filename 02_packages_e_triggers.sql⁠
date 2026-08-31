@@ -1,0 +1,83 @@
+-- ==========================================================
+-- PACOTE PL/SQL - GESTÃO ADUANEIRA & REGULATÓRIA
+-- ==========================================================
+
+-- Especificação do Pacote (Header)
+CREATE OR REPLACE PACKAGE pkg_aduaneiro AS
+    FUNCTION calcular_tributacao_usd (
+        p_valor_mercadoria IN NUMBER,
+        p_pais_destino IN VARCHAR2
+    ) RETURN NUMBER;
+
+    PROCEDURE aprovar_desembaraco (
+        p_id_carga IN NUMBER,
+        p_codigo_container IN VARCHAR2
+    );
+END pkg_aduaneiro;
+/
+
+-- Corpo do Pacote (Body)
+CREATE OR REPLACE PACKAGE BODY pkg_aduaneiro AS
+
+    -- Função para cálculo de tributo com base no país receptor
+    FUNCTION calcular_tributacao_usd (
+        p_valor_mercadoria IN NUMBER,
+        p_pais_destino IN VARCHAR2
+    ) RETURN NUMBER IS
+        v_aliquota NUMBER(5,2);
+        v_imposto NUMBER(15,2);
+    BEGIN
+        SELECT aliquota_imposto_padrao
+        INTO v_aliquota
+        FROM tb_paises
+        WHERE cd_pais = p_pais_destino;
+
+        v_imposto := p_valor_mercadoria * (v_aliquota / 100);
+        RETURN ROUND(v_imposto, 2);
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RETURN 0.00;
+    END calcular_tributacao_usd;
+
+    -- Procedimento para liberar carga e atualizar status fiscal
+    PROCEDURE aprovar_desembaraco (
+        p_id_carga IN NUMBER,
+        p_codigo_container IN VARCHAR2
+    ) IS
+    BEGIN
+        UPDATE tb_cargas
+        SET status_despacho = 'DESEMBARACADO_LIBERADO'
+        WHERE id_carga = p_id_carga 
+           OR codigo_container = p_codigo_container;
+
+        COMMIT;
+    END aprovar_desembaraco;
+
+END pkg_aduaneiro;
+/
+
+-- ==========================================================
+-- TRIGGER DE AUDITORIA AUTOMÁTICA EM MUTAÇÃO DE STATUS
+-- ==========================================================
+
+CREATE OR REPLACE TRIGGER trg_audita_status_carga
+AFTER UPDATE OF status_despacho ON tb_cargas
+FOR EACH ROW
+BEGIN
+    IF :OLD.status_despacho != :NEW.status_despacho THEN
+        INSERT INTO tb_auditoria_cargas (
+            id_carga,
+            status_anterior,
+            status_novo,
+            data_evento,
+            usuario_responsavel
+        ) VALUES (
+            :NEW.id_carga,
+            :OLD.status_despacho,
+            :NEW.status_despacho,
+            SYSTIMESTAMP,
+            USER
+        );
+    END IF;
+END;
+/
